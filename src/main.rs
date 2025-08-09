@@ -1,6 +1,5 @@
 use futures::StreamExt;
 use google_drive3::api::File;
-use mime;
 use std::sync::Arc;
 use std::{fs::File as FsFile, path::Path};
 
@@ -47,12 +46,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         return (fname, Err(e.into()));
                     }
                 };
-                // FIX: Use mime::Mime type instead of string
                 let mime: mime::Mime = "application/pdf".parse().unwrap();
 
-                let mut drive_file = File::default();
-                drive_file.name = Some(fname.clone());
-                drive_file.parents = Some(vec![folder_id.clone()]);
+                let drive_file = File {
+                    name: Some(fname.clone()),
+                    parents: Some(vec![folder_id.clone()]),
+                    ..Default::default()
+                };
 
                 let result = hub
                     .files()

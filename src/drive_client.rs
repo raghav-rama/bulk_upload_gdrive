@@ -34,5 +34,5 @@ pub async fn get_drive_client() -> Result<
     let mut hub = DriveHub::new(client, auth);
     hub.user_agent("drive-list/0.1".into()); // nice to have, not mandatory
     let hub = Arc::new(hub);
-    return Ok(hub);
+    Ok(hub)
 }
