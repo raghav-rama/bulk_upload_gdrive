@@ -3,12 +3,15 @@ use google_drive3::api::File;
 use std::sync::Arc;
 use std::{fs::File as FsFile, path::Path};
 
+use cli::{Cli, Parser};
 use drive_client::get_drive_client;
 
+mod cli;
 mod drive_client;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let _cli = Cli::parse();
     let hub = get_drive_client().await?;
     let dir = "/Users/ritz/Downloads/Aubrai papers";
     println!("Reading directory: {}", dir);
