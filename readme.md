@@ -43,8 +43,7 @@ This tool supports two authentication methods, each with different use cases and
 
 **Setup:** No browser required, uses a key file
 
-> [!IMPORTANT]
-> **Storage Quota Differences:**
+> [!IMPORTANT] > **Storage Quota Differences:**
 >
 > - **OAuth**: Files count against YOUR Google Drive storage (unlimited if you have Google One)
 > - **Service Account**: Files count against the service account's 15GB quota
@@ -278,16 +277,15 @@ The tool uses:
 ## 🚧 Roadmap
 
 - [x] OAuth 2.0 authentication support
-- [ ] Support for multiple file types (not just PDFs)
+- [x] Support for multiple file types (not just PDFs)
 - [ ] Resume interrupted uploads
-- [ ] Progress bar with ETA
+- [x] Progress bar with ETA
 - [ ] Recursive directory upload
 - [ ] File filtering options (by size, date, pattern)
 - [ ] Dry run mode
 - [ ] Upload verification
-- [ ] Configurable retry logic
+- [x] Configurable retry logic
 - [ ] Upload to shared drives
-- [ ] Domain-wide delegation support
 
 ## ⚠️ Limitations
 
