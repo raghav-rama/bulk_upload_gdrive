@@ -62,8 +62,12 @@ cargo build --release
 ### Command Line Interface
 
 ```bash
-gdrive --directory <PATH> --folder-id <FOLDER_ID> [OPTIONS]
+cargo run -- --auth-method <AUTH-METHOD> SUBCOMMAND --directory <PATH> --folder-id <FOLDER_ID> [OPTIONS]
 ```
+
+> [!CAUTION]
+> OAuth will use space available on your drive.
+> Service Account will use space in the service account (15 GB I think, not sure). You will get `storageQuotaExceeded` error if you use up all storage.
 
 ### Parameters
 
@@ -77,13 +81,10 @@ gdrive --directory <PATH> --folder-id <FOLDER_ID> [OPTIONS]
 
 ```bash
 # Basic usage
-gdrive -d /path/to/pdfs -f 1eAdXLJZZftHewGRn0H6fLGybj5xgF1Yw
+cargo run -- -a o-auth list -f 167P28wazY2_UZOuYp5pcqaShbj07j9FT
 
 # With custom concurrency limit
-gdrive -d /path/to/pdfs -f 1eAdXLJZZftHewGRn0H6fLGybj5xgF1Yw -c 500
-
-# Using long form parameters
-gdrive --directory /path/to/pdfs --folder-id 1eAdXLJZZftHewGRn0H6fLGybj5xgF1Yw --concurrency 100
+cargo run -- -a o-auth upload -d '/Users/ritz/Downloads/Aubrai papers' -f 167P28wazY2_UZOuYp5pcqaShbj07j9FT -c 1000
 ```
 
 ### Finding Folder ID

@@ -11,8 +11,8 @@ mod utils;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let hub = get_drive_client().await?;
     let cli = Cli::parse();
+    let hub = get_drive_client(&cli.auth_method).await?;
     match &cli.command {
         Commands::List { folder_id } => list_files(hub, folder_id).await?,
         Commands::Upload {
