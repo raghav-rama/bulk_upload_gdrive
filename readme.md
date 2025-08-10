@@ -21,7 +21,7 @@ A high-performance CLI tool for bulk uploading files to Google Drive. This tool 
 
 - Google Cloud Project with Drive API enabled
 - Service Account with appropriate permissions
-- `service_account.json` credentials file
+- `service_account.json` file if you want to use a service account or `credentials.json` if you want to use OAuth.
 
 ## 🔧 Installation
 
