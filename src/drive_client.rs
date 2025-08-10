@@ -1,12 +1,12 @@
+use anyhow::Result;
 use google_drive3::{
     DriveHub, hyper_rustls, hyper_util, yup_oauth2, yup_oauth2::ServiceAccountAuthenticator,
 };
 use std::{path::Path, sync::Arc};
 
-pub async fn get_drive_client() -> Result<
-    Arc<DriveHub<hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>>>,
-    Box<dyn std::error::Error>,
-> {
+use crate::types::TDriveHub;
+
+pub async fn get_drive_client() -> Result<TDriveHub> {
     let sa_key_path = Path::new("service_account.json");
     println!("Looking for service account file at: {:?}", sa_key_path);
     println!("File exists: {}", sa_key_path.exists());

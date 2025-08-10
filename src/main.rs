@@ -3,50 +3,23 @@
 // use std::sync::Arc;
 // use std::{fs::File as FsFile, path::Path};
 
+use anyhow::{Ok, Result};
 use cli::{Cli, Commands, Parser};
 use drive_client::get_drive_client;
 
+use crate::utils::list_files;
+
 mod cli;
 mod drive_client;
+mod types;
+mod utils;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<()> {
     let hub = get_drive_client().await?;
     let cli = Cli::parse();
     match &cli.command {
-        Commands::List { folder_id } => {
-            let result = hub
-                .files()
-                .list()
-                .q(&format!("'{}' in parents and trashed=false", folder_id))
-                // optional, if it is a shared drive
-                // .supports_all_drives(true)
-                // .include_items_from_all_drives(true)
-                // .corpora("drive")
-                // .drive_id("SHARED_DRIVE_ID")
-                .page_size(100)
-                .param("fields", "nextPageToken, files(id, name, mimeType)")
-                .add_scope(google_drive3::api::Scope::Full)
-                .doit()
-                .await?;
-
-            if let Some(files) = result.1.files {
-                if files.is_empty() {
-                    println!("No files found in that folder (visible to this service account).");
-                } else {
-                    println!("Files in folder {}:", folder_id);
-                    for f in files {
-                        println!(
-                            "- {} ({})",
-                            f.name.unwrap_or_default(),
-                            f.mime_type.unwrap_or_default()
-                        );
-                    }
-                }
-            } else {
-                println!("No files array returned.");
-            }
-        }
+        Commands::List { folder_id } => list_files(hub, folder_id).await?,
         Commands::Upload {
             directory,
             folder_id,
