@@ -1,47 +1,56 @@
 use crate::types::TDriveHub;
 use anyhow::Result;
 use futures::StreamExt;
-use google_drive3::api::{File, FileList};
+use google_drive3::api::File;
 use std::{fs::File as FsFile, path::Path, sync::Arc};
 
 pub async fn list_files(hub: TDriveHub, folder_id: &String) -> Result<()> {
-    let result = get_files(hub, folder_id).await?;
-
-    if let Some(files) = result.files {
-        if files.is_empty() {
-            println!("No files found in that folder (visible to this service account).");
-        } else {
-            println!("Files in folder {}:", folder_id);
-            for f in files {
-                println!(
-                    "- {} ({})",
-                    f.name.unwrap_or_default(),
-                    f.mime_type.unwrap_or_default()
-                );
-            }
-        }
+    let files = get_files(hub, folder_id).await?;
+    if files.is_empty() {
+        println!("No files found in that folder (visible to this service account).");
     } else {
-        println!("No files array returned.");
+        println!("Files in folder {}:", folder_id);
+        println!("{}", &files.len());
+        for f in files {
+            println!(
+                "- {} ({})",
+                f.name.unwrap_or_default(),
+                f.mime_type.unwrap_or_default()
+            );
+        }
     }
     Ok(())
 }
 
-pub async fn get_files(hub: TDriveHub, folder_id: &String) -> Result<FileList> {
-    let result = hub
-        .files()
-        .list()
-        .q(&format!("'{}' in parents and trashed=false", &folder_id))
-        // optional, if it is a shared drive
-        // .supports_all_drives(true)
-        // .include_items_from_all_drives(true)
-        // .corpora("drive")
-        // .drive_id("SHARED_DRIVE_ID")
-        .page_size(100)
-        .param("fields", "nextPageToken, files(id, name, mimeType)")
-        .add_scope(google_drive3::api::Scope::Full)
-        .doit()
-        .await?;
-    Ok(result.1)
+pub async fn get_files(hub: TDriveHub, folder_id: &String) -> Result<Vec<File>> {
+    let mut all_files = Vec::new();
+    let mut page_token: Option<String> = None;
+    loop {
+        let mut request = hub
+            .files()
+            .list()
+            .q(&format!("'{}' in parents and trashed=false", &folder_id))
+            // optional, if it is a shared drive
+            // .supports_all_drives(true)
+            // .include_items_from_all_drives(true)
+            // .corpora("drive")
+            // .drive_id("SHARED_DRIVE_ID")
+            // .page_size(100)
+            .param("fields", "nextPageToken, files(id, name, mimeType)")
+            .add_scope(google_drive3::api::Scope::Full);
+        if let Some(token) = page_token {
+            request = request.page_token(&token);
+        }
+        let (_, file_list) = request.doit().await?;
+        if let Some(files) = file_list.files {
+            all_files.extend(files);
+        }
+        page_token = file_list.next_page_token;
+        if page_token.is_none() {
+            break;
+        }
+    }
+    Ok(all_files)
 }
 
 pub async fn upload(
