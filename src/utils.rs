@@ -2,10 +2,12 @@ use crate::types::TDriveHub;
 use anyhow::Result;
 use futures::StreamExt;
 use google_drive3::api::File;
+use http_body_util::BodyExt;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use std::{
     collections::HashSet,
     fs::File as FsFile,
+    io::Write,
     path::Path,
     sync::{
         Arc,
@@ -368,5 +370,329 @@ fn get_mime_type(path: &Path) -> &'static str {
         Some("mp3") => "audio/mpeg",
         Some("zip") => "application/zip",
         _ => "application/octet-stream",
+    }
+}
+
+pub async fn download_files(
+    hub: TDriveHub,
+    folder_id: &String,
+    path: &String,
+    max_concurrency: usize,
+) -> Result<()> {
+    let start_time = Instant::now();
+    println!("Starting bulk download from Google Drive");
+    println!("Source folder ID: {}", folder_id);
+    println!("Target directory: {}", path);
+
+    std::fs::create_dir_all(path)?;
+
+    let files = get_files(Arc::clone(&hub), folder_id).await?;
+
+    if files.is_empty() {
+        println!("No files found in the specified folder");
+        return Ok(());
+    }
+
+    // Filter out folders
+    let files_to_download: Vec<_> = files
+        .into_iter()
+        .filter(|f| {
+            f.mime_type
+                .as_ref()
+                .map(|m| m != "application/vnd.google-apps.folder")
+                .unwrap_or(true)
+        })
+        .collect();
+
+    // download onlly new files
+    let existing_files = get_existing_local_files(path)?;
+    let new_files: Vec<_> = files_to_download
+        .into_iter()
+        .filter(|f| {
+            f.name
+                .as_ref()
+                .map(|name| !existing_files.contains(name))
+                .unwrap_or(false)
+        })
+        .collect();
+
+    if new_files.is_empty() {
+        println!("All files already exist locally. No downloads needed.");
+        return Ok(());
+    }
+
+    println!("Found {} files to download", new_files.len());
+
+    let total_size: i64 = new_files.iter().filter_map(|f| f.size).sum();
+    if total_size > 0 {
+        println!(
+            "Total size to download: {:.2} GB",
+            total_size as f64 / (1024.0 * 1024.0 * 1024.0)
+        );
+    }
+
+    let optimal_concurrency = calculate_download_concurrency(&new_files, max_concurrency);
+    println!("Using {} concurrent downloads", optimal_concurrency);
+
+    let multi_progress = Arc::new(MultiProgress::new());
+    let overall_progress = multi_progress.add(ProgressBar::new(new_files.len() as u64));
+    overall_progress.set_style(
+        ProgressStyle::default_bar()
+            .template("Downloading [{bar:40.cyan/blue}] {pos}/{len} files ({percent}%) | {elapsed_precise} | ETA: {eta_precise}")
+            .unwrap()
+            .progress_chars("█▓▒░ ")
+    );
+
+    let success_count = Arc::new(AtomicUsize::new(0));
+    let failure_count = Arc::new(AtomicUsize::new(0));
+    let retry_count = Arc::new(AtomicUsize::new(0));
+    let bytes_downloaded = Arc::new(AtomicUsize::new(0));
+
+    futures::stream::iter(new_files)
+        .map(|file| {
+            let hub = Arc::clone(&hub);
+            let target_dir = path.to_string();
+            let progress = Arc::clone(&multi_progress);
+            let overall_prog = overall_progress.clone();
+            let success = Arc::clone(&success_count);
+            let failure = Arc::clone(&failure_count);
+            let retries = Arc::clone(&retry_count);
+            let bytes = Arc::clone(&bytes_downloaded);
+
+            async move {
+                let file_id = file.id.as_ref().unwrap_or(&String::new()).to_string();
+                let file_name = file
+                    .name
+                    .as_ref()
+                    .unwrap_or(&String::from("unknown"))
+                    .to_string();
+                let file_size: u64 = file.size.unwrap_or(0).max(0) as u64;
+
+                let file_progress = progress.add(ProgressBar::new(if file_size > 0 {
+                    file_size
+                } else {
+                    100
+                }));
+                file_progress.set_style(
+                    ProgressStyle::default_bar()
+                        .template(&format!(
+                            "  {{bar:20.green/white}} {{bytes}}/{{total_bytes}} {}",
+                            file_name
+                        ))
+                        .unwrap(),
+                );
+
+                let result = download_file_with_retry(
+                    &hub,
+                    &file_id,
+                    &file_name,
+                    &target_dir,
+                    &file_progress,
+                    3, // max retries
+                    &retries,
+                    &bytes,
+                )
+                .await;
+
+                file_progress.finish_and_clear();
+                overall_prog.inc(1);
+
+                match result {
+                    Ok(_) => {
+                        success.fetch_add(1, Ordering::Relaxed);
+                        overall_prog.set_message(file_name.clone());
+                        (file_name, Ok(()))
+                    }
+                    Err(e) => {
+                        failure.fetch_add(1, Ordering::Relaxed);
+                        overall_prog.set_message(file_name.clone());
+                        (file_name, Err(e))
+                    }
+                }
+            }
+        })
+        .buffer_unordered(optimal_concurrency)
+        .for_each(|(fname, result)| async move {
+            match result {
+                Ok(_) => {
+                    println!("✓ Downloaded '{}'", fname);
+                }
+                Err(e) => {
+                    eprintln!("✗ Failed '{}': {}", fname, e);
+                }
+            }
+        })
+        .await;
+
+    overall_progress.finish_with_message("Download complete!");
+
+    let elapsed = start_time.elapsed();
+    let success = success_count.load(Ordering::Relaxed);
+    let failed = failure_count.load(Ordering::Relaxed);
+    let retries = retry_count.load(Ordering::Relaxed);
+    let total_bytes = bytes_downloaded.load(Ordering::Relaxed);
+
+    println!("\nDownload Summary:");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!("Successful downloads: {}", success);
+    println!("Failed downloads: {}", failed);
+    println!("Total retries: {}", retries);
+    println!("Total time: {:?}", elapsed);
+    println!(
+        "Average speed: {:.2} files/sec",
+        success as f64 / elapsed.as_secs_f64()
+    );
+
+    if total_bytes > 0 {
+        let mb_per_sec = (total_bytes as f64 / (1024.0 * 1024.0)) / elapsed.as_secs_f64();
+        println!("Download speed: {:.2} MB/s", mb_per_sec);
+    }
+
+    Ok(())
+}
+
+fn get_existing_local_files(path: &str) -> Result<HashSet<String>> {
+    let mut existing = HashSet::new();
+
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries.filter_map(Result::ok) {
+            if let Ok(metadata) = entry.metadata() {
+                if metadata.is_file() {
+                    let file_name = entry.file_name().to_string_lossy().to_string();
+                    existing.insert(file_name);
+                }
+            }
+        }
+    }
+
+    if !existing.is_empty() {
+        println!(
+            "Found {} existing files locally, will skip them",
+            existing.len()
+        );
+    }
+
+    Ok(existing)
+}
+
+fn calculate_download_concurrency(files: &[File], max_concurrency: usize) -> usize {
+    let avg_size: u64 = files
+        .iter()
+        .filter_map(|f| f.size.map(|s| s.max(0) as u64))
+        .sum::<u64>()
+        .checked_div(files.len() as u64)
+        .unwrap_or(0);
+
+    let optimal = if avg_size < 1_000_000 {
+        max_concurrency.min(50)
+    } else if avg_size < 10_000_000 {
+        max_concurrency.min(30)
+    } else if avg_size < 100_000_000 {
+        max_concurrency.min(10)
+    } else {
+        max_concurrency.min(5)
+    };
+
+    optimal.max(1)
+}
+
+async fn download_file_with_retry(
+    hub: &TDriveHub,
+    file_id: &str,
+    file_name: &str,
+    target_dir: &str,
+    progress: &ProgressBar,
+    max_retries: u32,
+    retry_counter: &Arc<AtomicUsize>,
+    bytes_counter: &Arc<AtomicUsize>,
+) -> Result<()> {
+    let mut attempt = 0;
+    let mut backoff = Duration::from_secs(1);
+
+    loop {
+        match download_single_file(hub, file_id, file_name, target_dir, progress, bytes_counter)
+            .await
+        {
+            Ok(_) => return Ok(()),
+            Err(e) if attempt < max_retries => {
+                attempt += 1;
+                retry_counter.fetch_add(1, Ordering::Relaxed);
+
+                let is_rate_limit = e.to_string().contains("rateLimitExceeded")
+                    || e.to_string().contains("userRateLimitExceeded")
+                    || e.to_string().contains("429");
+
+                if is_rate_limit {
+                    backoff = Duration::from_secs(10 * attempt as u64);
+                    eprintln!(
+                        "Rate limit hit for '{}', waiting {:?} before retry {}/{}",
+                        file_name, backoff, attempt, max_retries
+                    );
+                } else {
+                    eprintln!(
+                        "Download failed for '{}': {}, retrying {}/{} in {:?}",
+                        file_name, e, attempt, max_retries, backoff
+                    );
+                }
+
+                sleep(backoff).await;
+                backoff *= 2; // Exponential backoff
+                backoff = backoff.min(Duration::from_secs(60));
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+async fn download_single_file(
+    hub: &TDriveHub,
+    file_id: &str,
+    file_name: &str,
+    target_dir: &str,
+    progress: &ProgressBar,
+    bytes_counter: &Arc<AtomicUsize>,
+) -> Result<()> {
+    let target_path = Path::new(target_dir).join(file_name);
+    let temp_path = target_path.with_extension("tmp");
+    let mut temp_file = FsFile::create(&temp_path)?;
+    let hub_clone = Arc::clone(&hub);
+    let download_result = hub_clone
+        .files()
+        .get(file_id)
+        .param("alt", "media")
+        .supports_all_drives(true)
+        .add_scope(google_drive3::api::Scope::Full)
+        .doit()
+        .await;
+
+    match download_result {
+        Ok((response, _)) => {
+            let mut body = response.into_body();
+            let mut bytes_vec = Vec::new();
+            while let Some(frame_result) = body.frame().await {
+                let frame =
+                    frame_result.map_err(|e| anyhow::anyhow!("Failed to read frame: {}", e))?;
+                if let Some(chunk) = frame.data_ref() {
+                    bytes_vec.extend_from_slice(chunk);
+                    let current_size = bytes_vec.len();
+                    progress.set_position(current_size as u64);
+                }
+            }
+            let total_bytes = bytes_vec.len();
+            temp_file.write_all(&bytes_vec)?;
+            temp_file.sync_all()?;
+            bytes_counter.fetch_add(total_bytes, Ordering::Relaxed);
+            std::fs::rename(temp_path, target_path)?;
+
+            Ok(())
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(&temp_path);
+            Err(anyhow::anyhow!(
+                "Failed to download file '{}': {}",
+                file_name,
+                e
+            ))
+        }
     }
 }

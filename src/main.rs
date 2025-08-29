@@ -2,7 +2,7 @@ use anyhow::{Ok, Result};
 use cli::{Cli, Commands, Parser};
 use drive_client::get_drive_client;
 
-use crate::utils::{list_files, upload};
+use crate::utils::{download_files, list_files, upload};
 
 mod cli;
 mod drive_client;
@@ -20,6 +20,11 @@ async fn main() -> Result<()> {
             folder_id,
             concurrency,
         } => upload(hub, directory, folder_id, concurrency).await?,
+        Commands::Download {
+            path,
+            folder_id,
+            concurrency,
+        } => download_files(hub, folder_id, path, *concurrency).await?,
     };
     Ok(())
 }

@@ -33,4 +33,13 @@ pub enum Commands {
         #[arg(short = 'f', long)]
         folder_id: String,
     },
+    Download {
+        #[arg(short = 'p', long)]
+        path: String,
+        #[arg(short = 'f', long)]
+        folder_id: String,
+        /// Max concurrent downloads
+        #[arg(short = 'c', long, default_value_t = 50)]
+        concurrency: usize,
+    },
 }
