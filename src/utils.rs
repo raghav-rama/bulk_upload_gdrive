@@ -41,6 +41,9 @@ pub async fn get_files(hub: TDriveHub, folder_id: &String) -> Result<Vec<File>> 
             .files()
             .list()
             .q(&format!("'{}' in parents and trashed=false", &folder_id))
+            // .corpora("allDrives")
+            .include_items_from_all_drives(true)
+            .supports_all_drives(true)
             .page_size(1000)
             .param("fields", "nextPageToken, files(id, name, mimeType, size)")
             .add_scope(google_drive3::api::Scope::Full);
